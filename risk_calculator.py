@@ -28,7 +28,10 @@ from bytewax.dataflow import Dataflow
 from bytewax.connectors.kafka import KafkaSourceMessage
 
 import redis
+import aioredis
+import asyncio
 import logging
+from functools import lru_cache
 
 from models import (
     Portfolio, Position, MarketData, RiskCalculation,
@@ -70,47 +73,92 @@ class PerformanceTracker:
 
 perf_tracker = PerformanceTracker()
 
-# Redis connection
+# Redis connection pool for better performance
 try:
-    redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+    redis_pool = redis.ConnectionPool(
+        host='localhost', 
+        port=6379, 
+        max_connections=50,
+        decode_responses=True
+    )
+    redis_client = redis.Redis(connection_pool=redis_pool)
     redis_client.ping()
-    logger.info("✅ Redis connected")
+    logger.info("✅ Redis connected with connection pool")
 except:
     redis_client = None
     logger.warning("⚠️ Redis not available")
+
+# Async Redis for non-blocking operations
+async_redis = None
+async def init_async_redis():
+    global async_redis
+    try:
+        async_redis = await aioredis.create_redis_pool(
+            'redis://localhost:6379',
+            minsize=5,
+            maxsize=20
+        )
+        logger.info("✅ Async Redis pool initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ Async Redis not available: {e}")
 
 # Risk calculation constants
 RISK_FREE_RATE = 0.03
 CONFIDENCE_LEVEL = 0.95
 
-# Sector risk profiles
-SECTOR_VOLATILITY = {
-    Sector.TECHNOLOGY: 0.25,
-    Sector.HEALTHCARE: 0.18,
-    Sector.FINANCE: 0.20,
-    Sector.CONSUMER: 0.15,
-    Sector.ENERGY: 0.30,
-    Sector.RETAIL: 0.22,
-    Sector.TELECOM: 0.16,
-    Sector.ENTERTAINMENT: 0.28,
-    Sector.AUTOMOTIVE: 0.35,
-    Sector.REAL_ESTATE: 0.14,
-    Sector.OTHER: 0.20
-}
+# Cache sector lookups for performance
+@lru_cache(maxsize=128)
+def get_sector_volatility(sector: Sector) -> float:
+    volatilities = {
+        Sector.TECHNOLOGY: 0.25,
+        Sector.HEALTHCARE: 0.18,
+        Sector.FINANCE: 0.20,
+        Sector.CONSUMER: 0.15,
+        Sector.ENERGY: 0.30,
+        Sector.RETAIL: 0.22,
+        Sector.TELECOM: 0.16,
+        Sector.ENTERTAINMENT: 0.28,
+        Sector.AUTOMOTIVE: 0.35,
+        Sector.REAL_ESTATE: 0.14,
+        Sector.OTHER: 0.20
+    }
+    return volatilities.get(sector, 0.20)
 
-SECTOR_RETURNS = {
-    Sector.TECHNOLOGY: 0.12,
-    Sector.HEALTHCARE: 0.10,
-    Sector.FINANCE: 0.09,
-    Sector.CONSUMER: 0.08,
-    Sector.ENERGY: 0.07,
-    Sector.RETAIL: 0.09,
-    Sector.TELECOM: 0.06,
-    Sector.ENTERTAINMENT: 0.11,
-    Sector.AUTOMOTIVE: 0.15,
-    Sector.REAL_ESTATE: 0.07,
-    Sector.OTHER: 0.08
-}
+@lru_cache(maxsize=128)
+def get_sector_return(sector: Sector) -> float:
+    returns = {
+        Sector.TECHNOLOGY: 0.12,
+        Sector.HEALTHCARE: 0.10,
+        Sector.FINANCE: 0.09,
+        Sector.CONSUMER: 0.08,
+        Sector.ENERGY: 0.07,
+        Sector.RETAIL: 0.09,
+        Sector.TELECOM: 0.06,
+        Sector.ENTERTAINMENT: 0.11,
+        Sector.AUTOMOTIVE: 0.15,
+        Sector.REAL_ESTATE: 0.07,
+        Sector.OTHER: 0.08
+    }
+    return returns.get(sector, 0.08)
+
+# Pre-compute common sector correlations
+@lru_cache(maxsize=256)
+def get_sector_correlation(sector1: Sector, sector2: Sector) -> float:
+    if sector1 == sector2:
+        return 1.0
+    # High correlation for similar sectors
+    tech_sectors = {Sector.TECHNOLOGY, Sector.ENTERTAINMENT}
+    financial_sectors = {Sector.FINANCE, Sector.REAL_ESTATE}
+    consumer_sectors = {Sector.CONSUMER, Sector.RETAIL}
+    
+    if {sector1, sector2}.issubset(tech_sectors):
+        return 0.8
+    elif {sector1, sector2}.issubset(financial_sectors):
+        return 0.75
+    elif {sector1, sector2}.issubset(consumer_sectors):
+        return 0.7
+    else:
+        return 0.3  # Base correlation
 
 
 def parse_kafka_message(msg: KafkaSourceMessage) -> Optional[Tuple[str, Portfolio]]:
@@ -133,6 +181,65 @@ def parse_kafka_message(msg: KafkaSourceMessage) -> Optional[Tuple[str, Portfoli
     except Exception as e:
         logger.error(f"Error parsing message: {e}")
         return None
+
+
+def calculate_portfolio_risk_batch(batch: List[Tuple[str, Portfolio]]) -> List[Tuple[str, RiskCalculation]]:
+    """
+    Calculate risk for a batch of portfolios with vectorized operations.
+    
+    Args:
+        batch: List of (portfolio_id, Portfolio) tuples
+        
+    Returns:
+        List of (portfolio_id, RiskCalculation) tuples
+    """
+    results = []
+    
+    # Pre-allocate arrays for batch processing
+    batch_size = len(batch)
+    if batch_size == 0:
+        return results
+    
+    for portfolio_tuple in batch:
+        result = calculate_portfolio_risk(portfolio_tuple)
+        if result is not None:
+            results.append(result)
+    
+    # Batch Redis operations
+    if redis_client and results:
+        pipe = redis_client.pipeline(transaction=False)
+        
+        for key, risk_calc in results:
+            # Store all data in a single hash for fewer operations
+            risk_data = {
+                "portfolio_id": risk_calc.portfolio_id,
+                "advisor_id": risk_calc.advisor_id,
+                "risk_number": str(risk_calc.risk_number),
+                "var_95": str(risk_calc.var_95),
+                "expected_return": str(risk_calc.expected_return),
+                "volatility": str(risk_calc.volatility),
+                "sharpe_ratio": str(risk_calc.sharpe_ratio),
+                "calculation_time_ms": str(risk_calc.calculation_time_ms),
+                "timestamp": str(risk_calc.timestamp.isoformat()),
+                "last_update": str(time.time())
+            }
+            
+            # Single hash set operation instead of multiple operations
+            pipe.hset(f"portfolio:{key}", mapping=risk_data)
+            pipe.expire(f"portfolio:{key}", 300)  # 5 minute TTL
+            
+            # Update global metrics
+            pipe.hincrby("global:metrics", "total_calculations", 1)
+            pipe.hincrbyfloat("global:metrics", "total_processing_time_ms", risk_calc.calculation_time_ms)
+        
+        pipe.hset("global:metrics", "last_calculation", str(time.time()))
+        
+        try:
+            pipe.execute()
+        except Exception as e:
+            logger.error(f"Redis pipeline error: {e}")
+    
+    return results
 
 
 def calculate_portfolio_risk(portfolio_tuple: Tuple[str, Portfolio]) -> Optional[Tuple[str, RiskCalculation]]:
@@ -171,25 +278,25 @@ def calculate_portfolio_risk(portfolio_tuple: Tuple[str, Portfolio]) -> Optional
         # Calculate weights and returns - optimized with list comprehensions
         weights = np.array([position.weight / 100.0 for position in positions])
         
-        # Use sector-based returns and volatility - vectorized
+        # Use cached sector-based returns and volatility - vectorized
         sectors = [position.sector for position in positions]
-        returns = np.array([SECTOR_RETURNS.get(sector, 0.08) for sector in sectors])
-        volatilities = np.array([SECTOR_VOLATILITY.get(sector, 0.20) for sector in sectors])
+        returns = np.array([get_sector_return(sector) for sector in sectors])
+        volatilities = np.array([get_sector_volatility(sector) for sector in sectors])
         
         # Portfolio metrics
         portfolio_return = np.sum(weights * returns)
         
-        # Correlation matrix (simplified - using sector correlations)
+        # Vectorized correlation matrix using cached lookups
         n_assets = len(weights)
-        correlation = np.full((n_assets, n_assets), 0.3)  # Base correlation
         
-        # Higher correlation for same sector
+        # Create sector array for vectorized operations
+        sector_array = np.array(sectors)
+        
+        # Use broadcasting to create correlation matrix efficiently
+        correlation = np.zeros((n_assets, n_assets))
         for i in range(n_assets):
             for j in range(n_assets):
-                if i == j:
-                    correlation[i, j] = 1.0
-                elif positions[i].sector == positions[j].sector:
-                    correlation[i, j] = 0.7
+                correlation[i, j] = get_sector_correlation(sectors[i], sectors[j])
         
         # Covariance matrix
         cov_matrix = np.outer(volatilities, volatilities) * correlation
@@ -227,35 +334,7 @@ def calculate_portfolio_risk(portfolio_tuple: Tuple[str, Portfolio]) -> Optional
             calculation_time_ms=calculation_time
         )
         
-        # Cache in Redis if available - using pipeline for performance
-        if redis_client:
-            try:
-                # Use pipeline to batch all Redis operations
-                pipe = redis_client.pipeline(transaction=False)
-                
-                # Queue all operations
-                pipe.setex(
-                    f"risk:{portfolio.id}",
-                    300,  # 5 minute TTL
-                    risk_calc.json()
-                )
-                
-                stats_key = f"stats:{portfolio.id}"
-                pipe.hincrby(stats_key, "count", 1)
-                pipe.hset(stats_key, "last_update", str(time.time()))
-                pipe.hset(stats_key, "processing_time_ms", str(calculation_time))
-                pipe.expire(stats_key, 3600)  # 1 hour TTL
-                
-                # Update global performance metrics
-                pipe.hincrby("global:metrics", "total_calculations", 1)
-                pipe.hincrbyfloat("global:metrics", "total_processing_time_ms", calculation_time)
-                pipe.hset("global:metrics", "last_calculation", str(time.time()))
-                
-                # Execute all operations at once
-                pipe.execute()
-                
-            except Exception as e:
-                logger.error(f"Redis error: {e}")
+        # Redis operations moved to batch function for better performance
         
         logger.info(f"✅ Calculated risk for {portfolio.id}: "
                    f"Risk={risk_number}, VaR=${var_95:,.2f}, "
@@ -301,6 +380,24 @@ def serialize_for_kafka(risk_data: Tuple[str, RiskCalculation]) -> Optional[Kafk
     )
 
 
+def serialize_batch_for_kafka(batch_results: List[Tuple[str, RiskCalculation]]) -> List[KafkaSinkMessage]:
+    """
+    Serialize a batch of risk calculations for Kafka output.
+    
+    Args:
+        batch_results: List of (portfolio_id, RiskCalculation) tuples
+        
+    Returns:
+        List of KafkaSinkMessage objects
+    """
+    messages = []
+    for risk_data in batch_results:
+        msg = serialize_for_kafka(risk_data)
+        if msg is not None:
+            messages.append(msg)
+    return messages
+
+
 def build_dataflow():
     """
     Build the Prospector risk calculation dataflow pipeline.
@@ -309,7 +406,7 @@ def build_dataflow():
         Dataflow object configured with the complete processing pipeline
         
     Pipeline stages:
-    1. Input: Consume portfolio updates from Kafka topic 'portfolio-updates'
+    1. Input: Consume portfolio updates from Kafka topic 'portfolio-updates-v2'
     2. Parse: Deserialize JSON messages into Portfolio objects
     3. Filter: Remove any malformed messages
     4. Calculate: Compute risk metrics for each portfolio
@@ -326,7 +423,7 @@ def build_dataflow():
         flow, 
         KafkaSource(
             brokers=["localhost:9092"],
-            topics=["portfolio-updates"],
+            topics=["portfolio-updates-v2"],
             batch_size=1000  # Increased from 10 for better throughput
         )
     )

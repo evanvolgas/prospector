@@ -71,7 +71,7 @@ services:
       sleep 5
       
       echo 'Creating topics...'
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic portfolio-updates --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic portfolio-updates-v2 --partitions 12 --replication-factor 1
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic market-data --partitions 3 --replication-factor 1
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic risk-updates --partitions 3 --replication-factor 1
       

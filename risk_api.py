@@ -388,7 +388,7 @@ async def update_portfolio(update: PortfolioUpdate):
     try:
         # Send to Kafka
         kafka_producer.produce(
-            'portfolio-updates',
+            'portfolio-updates-v2',
             key=update.portfolio.id.encode(),
             value=update.portfolio.json().encode()
         )
@@ -470,7 +470,7 @@ async def simulate_portfolio_update(
         
         # Send to Kafka
         kafka_producer.produce(
-            'portfolio-updates',
+            'portfolio-updates-v2',
             key=portfolio.id.encode(),
             value=portfolio.json().encode()
         )

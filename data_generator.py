@@ -254,12 +254,12 @@ class PortfolioGenerator:
         Args:
             portfolio: Portfolio object to send
             
-        Sends to 'portfolio-updates' topic with portfolio ID as key
+        Sends to 'portfolio-updates-v2' topic with portfolio ID as key
         for consistent partitioning. Message value is JSON-serialized
         portfolio data.
         """
         self.producer.produce(
-            'portfolio-updates',
+            'portfolio-updates-v2',
             key=portfolio.id.encode(),
             value=portfolio.json().encode(),
             callback=self.delivery_report
