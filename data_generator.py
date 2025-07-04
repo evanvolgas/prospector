@@ -188,7 +188,7 @@ class PortfolioGenerator:
             price = self.get_current_price(symbol)
             weight = weights[i]
             position_value = portfolio_target * (weight / 100)
-            quantity = int(position_value / price)
+            quantity = max(1, int(position_value / price))  # Ensure at least 1 share
             market_value = quantity * price
             
             position = Position(

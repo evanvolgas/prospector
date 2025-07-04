@@ -1,0 +1,45 @@
+{
+  "timestamp": "2025-07-03T21:13:13.657798",
+  "consumer_group": "benchmark",
+  "results": {
+    "kafka": {
+      "messages_read": 900948,
+      "bytes_read": 1962651868,
+      "duration_seconds": 30.315415859222412,
+      "messages_per_second": 29719.137094598616,
+      "mb_per_second": 61.741877045336345,
+      "avg_message_size": 2178.429685176059,
+      "latency_p50": 0.00095367431640625,
+      "latency_p95": 0.0011920928955078125,
+      "latency_p99": 0.0021457672119140625
+    },
+    "redis": {
+      "read": {
+        "operations": 51772,
+        "duration_seconds": 10.000121116638184,
+        "ops_per_second": 5177.137296253526,
+        "latency_p50": 0.18095970153808594,
+        "latency_p95": 0.2609372138977044,
+        "latency_p99": 0.42803049087524436,
+        "latency_avg": 0.1923981934548677
+      },
+      "write": {
+        "operations": 50046,
+        "duration_seconds": 10.000096797943115,
+        "ops_per_second": 5004.5515569703075,
+        "latency_p50": 0.18286705017089844,
+        "latency_p95": 0.2550482749938965,
+        "latency_p99": 0.3559589385986328,
+        "latency_avg": 0.1940411953113731
+      }
+    },
+    "e2e": {
+      "messages_processed": 171001,
+      "duration_seconds": 30.30959725379944,
+      "messages_per_second": 5641.81036679939,
+      "processing_latency_p50": 0.030040740966796875,
+      "processing_latency_p95": 0.049114227294921875,
+      "processing_latency_p99": 0.056743621826171875
+    }
+  }
+}

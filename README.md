@@ -1,12 +1,12 @@
-# Bytewax Real-Time Portfolio Risk Calculator
+# Prospector Real-Time Risk Calculator
 
-A high-performance, real-time portfolio risk calculation system built with Bytewax, Kafka, and Redis. This system processes portfolio updates and market data streams to calculate risk metrics including Value at Risk (VaR), Sharpe ratios, and custom risk scores.
+A high-performance, real-time portfolio risk calculation system built with Bytewax, Kafka, and Redis. Prospector processes portfolio updates and market data streams to calculate risk metrics including Value at Risk (VaR), Sharpe ratios, and custom risk scores.
 
 ## Architecture Overview
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ Data Generator  │────▶│     Kafka       │────▶│ Bytewax Risk    │
+│ Data Generator  │────▶│     Kafka       │────▶│ Prospector      │
 │                 │     │                 │     │ Calculator      │
 └─────────────────┘     └─────────────────┘     └────────┬────────┘
                                                           │
@@ -34,30 +34,49 @@ A high-performance, real-time portfolio risk calculation system built with Bytew
 ## Prerequisites
 
 - Docker and Docker Compose
-- Python 3.8+ (for local development)
+- Python 3.9+ (for local development)
 - uv (Python package manager) - Install with: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ## Quick Start
 
-### Using Make (Recommended)
+### Using Prospector CLI (Recommended)
 
 ```bash
-# One-command setup
-make quickstart
+# Install dependencies
+uv sync
 
-# Then in separate terminals:
-make run-generator  # Terminal 1
-make run-calculator # Terminal 2
-make run-api       # Terminal 3
+# Start everything with one command
+uv run prospector start all
+
+# Or run demo mode
+uv run prospector demo
 ```
 
-### Manual Setup
+That's it! The Prospector CLI handles all the complexity of starting services in the right order.
+
+### Available Commands
+
+```bash
+# Start/stop components
+uv run prospector start all      # Start everything
+uv run prospector start infra    # Start only Kafka/Redis
+uv run prospector stop all       # Stop everything
+
+# Status and monitoring
+uv run prospector status         # Show component status
+
+# Testing and benchmarks
+uv run prospector generate       # Generate test data
+uv run prospector benchmark      # Run performance benchmark
+```
+
+### Manual Setup (Alternative)
 
 #### 1. Clone the Repository
 
 ```bash
 git clone <repository-url>
-cd faust
+cd prospector
 ```
 
 #### 2. Start Infrastructure
@@ -119,11 +138,12 @@ make run-api
 uv run risk-api
 ```
 
-### 7. Access the Services
+## Access the Services
 
 - **Kafka UI**: http://localhost:8080 - Monitor topics and messages
 - **Risk API**: http://localhost:6066 - REST API and documentation
 - **API Docs**: http://localhost:6066/docs - Interactive API documentation
+- **RedisInsight**: http://localhost:8001 - Redis web UI
 
 ## API Endpoints
 
@@ -163,47 +183,89 @@ curl http://localhost:6066/metrics/summary
 
 ```bash
 # Continuous mode with custom intervals
-uv run python bytewax_data_generator.py \
+uv run data-generator \
   --portfolio-interval 5.0 \
   --market-interval 2.0
 
 # Batch mode with custom settings
-uv run python bytewax_data_generator.py \
+uv run data-generator \
   --mode batch \
   --num-portfolios 200 \
   --updates-per-portfolio 10
 ```
 
-### Bytewax Worker Options
+### Risk Calculator Options
 
 ```bash
 # Run with multiple workers
-uv run python run_risk_calculator.py --workers 4
+uv run risk-calculator --workers 4
 
 # Enable recovery (requires persistent storage)
-uv run python run_risk_calculator.py \
+uv run risk-calculator \
   --recovery-directory ./recovery \
   --epoch-interval 10
 ```
 
+## Architecture Components
+
+### Prospector CLI
+
+The `prospector` command is your main interface for managing all components:
+
+```bash
+uv run prospector --help
+```
+
+It automatically:
+- Checks if Docker services are already running
+- Starts only what's needed
+- Manages component lifecycle
+- Provides unified status monitoring
+
 ## Development
+
+### Running Individual Components
+
+While the Prospector CLI is recommended, you can still run components individually:
+
+```bash
+# Start infrastructure only
+docker-compose up -d
+
+# Run specific components
+uv run risk-calculator --workers 4
+uv run data-generator --mode continuous
+uv run risk-api
+```
+
+### Performance Testing
+
+```bash
+# Quick benchmark (1000 portfolios)
+uv run prospector benchmark
+
+# Large benchmark
+uv run prospector benchmark --portfolios 10000 --updates 10
+
+# Throughput testing
+uv run benchmark-throughput
+```
 
 ### Project Structure
 
 ```
 .
+├── prospector.py               # Master control CLI
+├── risk_calculator.py          # Main risk calculation engine
+├── data_generator.py           # Test data generator
+├── risk_api.py                 # FastAPI REST service
+├── models.py                   # Pydantic data models
+├── benchmark_throughput.py     # Throughput testing tool
 ├── docker-compose.yml          # Infrastructure setup
-├── pyproject.toml              # Project configuration and dependencies
-├── README.md                   # This file
-├── Makefile                    # Convenience commands
-├── bytewax_risk_calculator.py  # Main risk calculation logic
-├── bytewax_data_generator.py   # Test data generator
-├── run_risk_calculator.py      # Bytewax runner script
-├── risk_api.py                 # FastAPI monitoring service
-└── old/                        # Legacy Faust implementation (deprecated)
-    ├── risk_calculator.py      
-    ├── data_generator.py       
-    └── performance_test.py     
+├── pyproject.toml              # Project configuration
+├── PERFORMANCE_OPTIMIZATIONS.md # Performance optimization guide
+├── THROUGHPUT_TESTING.md       # Throughput testing guide
+└── README.md                   # This file
 ```
 
 ### Running Tests
@@ -228,65 +290,60 @@ uv run mypy .
 
 ### Debugging
 
-1. **Check Kafka Topics**:
+1. **Check System Status**:
+   ```bash
+   uv run prospector status
+   ```
+
+2. **Check Kafka Topics**:
    - Open Kafka UI at http://localhost:8080
    - Verify topics exist: `portfolio-updates`, `market-data`, `risk-updates`
    - Check message flow
 
-2. **View Logs**:
+3. **View Logs**:
    ```bash
    # All services
    docker-compose logs -f
-   
+
    # Specific service
    docker-compose logs -f kafka
    ```
 
-3. **Redis CLI**:
+4. **Redis Debugging**:
+   - Use RedisInsight UI at http://localhost:8001
+   - Or use CLI:
    ```bash
-   # Connect to Redis
    docker exec -it redis redis-cli
-   
-   # List all keys
-   KEYS *
-   
-   # Get specific risk calculation
-   GET risk:portfolio_123
+   KEYS risk:*
    ```
 
-## Performance Tuning
+## Performance Benchmarking
 
-### Kafka Configuration
+### Throughput Testing
 
-Edit `docker-compose.yml` to adjust:
-- Partition count for topics (more partitions = more parallelism)
-- Replication factor (for production use)
-- Message retention settings
-
-### Bytewax Optimization
-
-```python
-# In bytewax_risk_calculator.py, adjust:
-batch_size=100  # Increase for higher throughput
-```
-
-### Redis Optimization
-
-```yaml
-# In docker-compose.yml, add Redis configuration:
-command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru
-```
-
-## Production Deployment
-
-### Using Kubernetes
+The `benchmark-throughput` command tests actual read and processing speeds without clearing your data:
 
 ```bash
-# Deploy with waxctl (Bytewax CLI)
-waxctl create deployment risk-calculator \
-  --image your-registry/risk-calculator:latest \
-  --replicas 3
+# Run complete throughput benchmark
+uv run benchmark-throughput
+
+# Test with more messages
+uv run benchmark-throughput --kafka-messages 50000 --redis-operations 20000
+
+# Reprocess topic from beginning
+uv run benchmark-throughput --from-beginning
+
+# Use specific consumer group
+uv run benchmark-throughput --consumer-group my-test-group
 ```
+
+#### What It Measures
+
+1. **Kafka Read Performance**: Messages/second and MB/second consumption rates
+2. **Redis Performance**: Read and write operations per second
+3. **End-to-End Processing**: Actual throughput with the risk calculator running
+
+##  Deployment
 
 ### Environment Variables
 
@@ -307,28 +364,43 @@ LOG_LEVEL=INFO
 
 ### Common Issues
 
-1. **Kafka Connection Failed**
+1. **Services Won't Start**
    ```bash
-   # Ensure Kafka is running
-   docker-compose ps
-   
-   # Check Kafka logs
-   docker-compose logs kafka
+   # Check what's already running
+   uv run prospector status
+
+   # Force restart everything
+   uv run prospector stop all
+   uv run prospector start all
    ```
 
-2. **Redis Connection Failed**
+2. **Kafka Connection Failed**
    ```bash
-   # Ensure Redis is running
-   docker-compose ps redis
-   
-   # Test connection
-   docker exec -it redis redis-cli ping
+   # Infrastructure may not be ready
+   uv run prospector start infra
+   # Wait 10 seconds, then try again
    ```
 
 3. **No Risk Calculations Appearing**
-   - Check data generator is running
-   - Verify Kafka topics have messages
-   - Check Bytewax worker logs for errors
+   ```bash
+   # Generate test data first
+   uv run prospector generate --portfolios 100
+
+   # Check if calculator is processing
+   uv run prospector status
+   ```
+
+4. **Performance Issues**
+   ```bash
+   # Run benchmark to diagnose
+   uv run prospector benchmark --portfolios 100
+
+   # Run throughput test
+   uv run benchmark-throughput
+
+   # Increase workers if needed
+   uv run risk-calculator --workers 4
+   ```
 
 ## Contributing
 

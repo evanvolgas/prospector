@@ -1,7 +1,7 @@
 [project]
 name = "prospector-risk-calculator"
 version = "1.0.0"
-description = "Real-time portfolio risk calculator using stream processing"
+description = "Prospector - Real-time portfolio risk calculator using Bytewax stream processing"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -19,6 +19,10 @@ dependencies = [
     "uvicorn>=0.35.0",
     "faker>=20.0.0",
     "pydantic>=2.0.0",
+    "matplotlib>=3.5.0",
+    "docker>=6.0.0",
+    "psutil>=5.9.0",
+    "orjson>=3.9.0",
 ]
 
 [project.optional-dependencies]
@@ -32,8 +36,14 @@ dev = [
 ]
 
 [project.scripts]
+prospector = "prospector:main"
 risk-calculator = "risk_calculator:main"
 data-generator = "data_generator:main"
+benchmark-monitor = "benchmark_monitor:main"
+performance-dashboard = "performance_dashboard:main"
+benchmark-throughput = "benchmark_throughput:main"
+benchmark-fast = "benchmark_throughput_fast:main"
+risk-api = "risk_api:main"
 
 [build-system]
 requires = ["hatchling"]

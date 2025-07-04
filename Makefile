@@ -88,25 +88,27 @@ run-generator:
 	uv run data-generator
 
 run-api:
-	uv run uvicorn risk_api:app --host 0.0.0.0 --port 6066 --reload
+	uv run risk-api
 
-run-all:
-	@echo "Starting all services..."
-	@echo "Open separate terminals and run:"
-	@echo "  1. make run-generator"
-	@echo "  2. make run-calculator"
-	@echo "  3. make run-api"
+# New unified commands using prospector CLI
+run:
+	uv run prospector start all
+
+demo:
+	uv run prospector demo
+
+benchmark:
+	uv run prospector benchmark
+
+monitor:
+	uv run prospector start monitor
+
+dashboard:
+	uv run prospector start dashboard
 
 # Monitoring
 status:
-	@echo "=== Docker Services ==="
-	@docker-compose ps
-	@echo ""
-	@echo "=== Kafka Topics ==="
-	@docker exec kafka kafka-topics --bootstrap-server localhost:9092 --list 2>/dev/null || echo "Kafka not running"
-	@echo ""
-	@echo "=== Redis Status ==="
-	@docker exec redis redis-cli ping 2>/dev/null && echo "Redis is running" || echo "Redis not running"
+	uv run prospector status
 
 topics:
 	docker exec kafka kafka-topics --bootstrap-server localhost:9092 --list
@@ -115,14 +117,9 @@ redis-cli:
 	docker exec -it redis redis-cli
 
 # Quick start commands
-quickstart: up install
-	@echo ""
-	@echo "Infrastructure is ready! Now run:"
-	@echo "  make run-all"
-	@echo ""
-	@echo "Then visit:"
-	@echo "  - API Docs: http://localhost:6066/docs"
-	@echo "  - Kafka UI: http://localhost:8080"
+quickstart: install
+	@echo "🚀 Starting Prospector in demo mode..."
+	uv run prospector demo
 
 # Development shortcuts
 dev: install-dev format lint type-check test

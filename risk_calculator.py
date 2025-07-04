@@ -2,7 +2,7 @@
 """
 Prospector Risk Calculator - Real-time portfolio risk analysis engine.
 
-This module implements the core risk calculation pipeline using stream processing
+This module implements the core risk calculation pipeline using Bytewax stream processing
 to analyze portfolio positions and calculate various risk metrics including:
 - Value at Risk (VaR) at 95% confidence level
 - Portfolio volatility and expected returns
@@ -19,9 +19,11 @@ import time
 import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
+from collections import deque
+import threading
 
 import bytewax.operators as op
-from bytewax.connectors.kafka import KafkaSource, KafkaSink
+from bytewax.connectors.kafka import KafkaSource, KafkaSink, KafkaSinkMessage
 from bytewax.dataflow import Dataflow
 from bytewax.connectors.kafka import KafkaSourceMessage
 
@@ -36,6 +38,37 @@ from models import (
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Performance metrics
+class PerformanceTracker:
+    def __init__(self):
+        self.messages_processed = 0
+        self.total_processing_time = 0
+        self.start_time = time.time()
+        self.recent_latencies = deque(maxlen=1000)
+        self.lock = threading.Lock()
+    
+    def record_message(self, latency_ms: float):
+        with self.lock:
+            self.messages_processed += 1
+            self.total_processing_time += latency_ms
+            self.recent_latencies.append(latency_ms)
+    
+    def get_stats(self):
+        with self.lock:
+            elapsed = time.time() - self.start_time
+            throughput = self.messages_processed / elapsed if elapsed > 0 else 0
+            avg_latency = self.total_processing_time / self.messages_processed if self.messages_processed > 0 else 0
+            recent_avg = sum(self.recent_latencies) / len(self.recent_latencies) if self.recent_latencies else 0
+            return {
+                'messages_processed': self.messages_processed,
+                'throughput_per_second': throughput,
+                'avg_latency_ms': avg_latency,
+                'recent_avg_latency_ms': recent_avg,
+                'uptime_seconds': elapsed
+            }
+
+perf_tracker = PerformanceTracker()
 
 # Redis connection
 try:
@@ -135,24 +168,13 @@ def calculate_portfolio_risk(portfolio_tuple: Tuple[str, Portfolio]) -> Optional
         positions = portfolio.positions
         total_value = portfolio.total_value
         
-        # Calculate weights and returns
-        weights = []
-        returns = []
-        volatilities = []
+        # Calculate weights and returns - optimized with list comprehensions
+        weights = np.array([position.weight / 100.0 for position in positions])
         
-        for position in positions:
-            weight = position.weight / 100.0
-            weights.append(weight)
-            
-            # Use sector-based returns and volatility
-            sector = position.sector
-            returns.append(SECTOR_RETURNS.get(sector, 0.08))
-            volatilities.append(SECTOR_VOLATILITY.get(sector, 0.20))
-        
-        # Convert to numpy arrays
-        weights = np.array(weights)
-        returns = np.array(returns)
-        volatilities = np.array(volatilities)
+        # Use sector-based returns and volatility - vectorized
+        sectors = [position.sector for position in positions]
+        returns = np.array([SECTOR_RETURNS.get(sector, 0.08) for sector in sectors])
+        volatilities = np.array([SECTOR_VOLATILITY.get(sector, 0.20) for sector in sectors])
         
         # Portfolio metrics
         portfolio_return = np.sum(weights * returns)
@@ -205,25 +227,49 @@ def calculate_portfolio_risk(portfolio_tuple: Tuple[str, Portfolio]) -> Optional
             calculation_time_ms=calculation_time
         )
         
-        # Cache in Redis if available
+        # Cache in Redis if available - using pipeline for performance
         if redis_client:
             try:
-                redis_client.setex(
+                # Use pipeline to batch all Redis operations
+                pipe = redis_client.pipeline(transaction=False)
+                
+                # Queue all operations
+                pipe.setex(
                     f"risk:{portfolio.id}",
                     300,  # 5 minute TTL
                     risk_calc.json()
                 )
-                # Update stats
+                
                 stats_key = f"stats:{portfolio.id}"
-                redis_client.hincrby(stats_key, "count", 1)
-                redis_client.hset(stats_key, "last_update", str(time.time()))
-                redis_client.expire(stats_key, 3600)  # 1 hour TTL
+                pipe.hincrby(stats_key, "count", 1)
+                pipe.hset(stats_key, "last_update", str(time.time()))
+                pipe.hset(stats_key, "processing_time_ms", str(calculation_time))
+                pipe.expire(stats_key, 3600)  # 1 hour TTL
+                
+                # Update global performance metrics
+                pipe.hincrby("global:metrics", "total_calculations", 1)
+                pipe.hincrbyfloat("global:metrics", "total_processing_time_ms", calculation_time)
+                pipe.hset("global:metrics", "last_calculation", str(time.time()))
+                
+                # Execute all operations at once
+                pipe.execute()
+                
             except Exception as e:
                 logger.error(f"Redis error: {e}")
         
         logger.info(f"✅ Calculated risk for {portfolio.id}: "
                    f"Risk={risk_number}, VaR=${var_95:,.2f}, "
                    f"Return={portfolio_return:.2%}, Vol={portfolio_volatility:.2%}")
+        
+        # Track performance metrics
+        perf_tracker.record_message(calculation_time)
+        
+        # Log performance stats every 100 messages
+        if perf_tracker.messages_processed % 100 == 0:
+            stats = perf_tracker.get_stats()
+            logger.info(f"📊 PERFORMANCE: Processed {stats['messages_processed']} messages | "
+                       f"Throughput: {stats['throughput_per_second']:.2f} msg/s | "
+                       f"Avg latency: {stats['recent_avg_latency_ms']:.2f}ms")
         
         return (key, risk_calc)
         
@@ -232,7 +278,7 @@ def calculate_portfolio_risk(portfolio_tuple: Tuple[str, Portfolio]) -> Optional
         return None
 
 
-def serialize_for_kafka(risk_data: Tuple[str, RiskCalculation]) -> Optional[KafkaSourceMessage]:
+def serialize_for_kafka(risk_data: Tuple[str, RiskCalculation]) -> Optional[KafkaSinkMessage]:
     """
     Serialize risk calculation for Kafka output.
     
@@ -240,7 +286,7 @@ def serialize_for_kafka(risk_data: Tuple[str, RiskCalculation]) -> Optional[Kafk
         risk_data: Tuple of (portfolio_id, RiskCalculation object)
         
     Returns:
-        KafkaSourceMessage with portfolio_id as key and JSON-serialized risk data as value
+        KafkaSinkMessage for Kafka sink
         
     The serialized message uses the portfolio ID as the Kafka key to ensure
     all updates for a given portfolio are routed to the same partition.
@@ -249,7 +295,7 @@ def serialize_for_kafka(risk_data: Tuple[str, RiskCalculation]) -> Optional[Kafk
         return None
         
     key, risk_calc = risk_data
-    return KafkaSourceMessage(
+    return KafkaSinkMessage(
         key=risk_calc.portfolio_id.encode(),
         value=risk_calc.json().encode()
     )
@@ -274,14 +320,14 @@ def build_dataflow():
     """
     flow = Dataflow("prospector-risk-calculator")
     
-    # Input from Kafka
+    # Input from Kafka with larger batch size for better throughput
     portfolio_stream = op.input(
         "portfolio-input", 
         flow, 
         KafkaSource(
             brokers=["localhost:9092"],
             topics=["portfolio-updates"],
-            batch_size=10
+            batch_size=1000  # Increased from 10 for better throughput
         )
     )
     
@@ -331,7 +377,13 @@ def main():
     logger.info("🚀 Starting Prospector Risk Calculator")
     logger.info("📝 Using structured Pydantic data validation")
     logger.info("📊 Advanced risk calculations with sector-based correlations")
-    logger.info("⚡ Real-time stream processing for portfolio risk analysis")
+    logger.info("⚡ Real-time stream processing with Bytewax for portfolio risk analysis")
+    logger.info("📡 Performance tracking enabled - metrics available in Redis")
+    
+    # Reset global metrics in Redis
+    if redis_client:
+        redis_client.delete("global:metrics")
+        redis_client.hset("global:metrics", "start_time", str(time.time()))
     
     from bytewax.run import cli_main
     flow = build_dataflow()

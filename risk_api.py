@@ -609,5 +609,11 @@ async def stream_risk_updates(portfolio_id: Optional[str] = None):
     from fastapi.responses import StreamingResponse
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-if __name__ == "__main__":
+def main():
+    """Entry point for the risk API server."""
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=6066)
+
+
+if __name__ == "__main__":
+    main()
