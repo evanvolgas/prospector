@@ -58,10 +58,10 @@ A high-performance, real-time portfolio risk calculation system built with Bytew
 uv sync
 
 # Start everything with one command
-uv run prospector start all
+uv run python prospector.py start all
 
 # Or run demo mode
-uv run prospector demo
+uv run python prospector.py demo
 ```
 
 That's it! The Prospector CLI handles all the complexity of starting services in the right order.
@@ -70,16 +70,16 @@ That's it! The Prospector CLI handles all the complexity of starting services in
 
 ```bash
 # Start/stop components
-uv run prospector start all      # Start everything
-uv run prospector start infra    # Start only Kafka/Redis
-uv run prospector stop all       # Stop everything
+uv run python prospector.py start all      # Start everything
+uv run python prospector.py start infra    # Start only Kafka/Redis
+uv run python prospector.py stop all       # Stop everything
 
 # Status and monitoring
-uv run prospector status         # Show component status
+uv run python prospector.py status         # Show component status
 
 # Testing and benchmarks
-uv run prospector generate       # Generate test data
-uv run prospector benchmark      # Run performance benchmark
+uv run python prospector.py generate       # Generate test data
+uv run python prospector.py benchmark      # Run performance benchmark
 ```
 
 ### Manual Setup (Alternative)
@@ -121,10 +121,10 @@ uv sync
 make run-generator
 
 # Or manually
-uv run data-generator
+uv run python data_generator.py
 
 # Batch mode
-uv run data-generator --mode batch --num-portfolios 50
+uv run python data_generator.py --mode batch --num-portfolios 50
 ```
 
 #### 5. Run the Risk Calculator
@@ -134,10 +134,10 @@ uv run data-generator --mode batch --num-portfolios 50
 make run-calculator
 
 # Or manually
-uv run risk-calculator
+uv run python risk_calculator.py
 
 # With multiple workers
-uv run risk-calculator --workers 4
+uv run python risk_calculator.py -w 4
 ```
 
 #### 6. Start the Monitoring API
@@ -147,7 +147,7 @@ uv run risk-calculator --workers 4
 make run-api
 
 # Or manually
-uv run risk-api
+uv run python risk_api.py
 ```
 
 ## Access the Services
@@ -181,7 +181,7 @@ curl http://localhost:6066/advisor/{advisor_id}/portfolios
 
 ### Simulate Portfolio Update
 ```bash
-curl -X POST http://localhost:6066/simulate/portfolio-update?portfolio_id=test-123
+curl -X POST "http://localhost:6066/portfolio/simulate?portfolio_id=test-123"
 ```
 
 ### Get Metrics Summary
@@ -195,12 +195,12 @@ curl http://localhost:6066/metrics/summary
 
 ```bash
 # Continuous mode with custom intervals
-uv run data-generator \
+uv run python data_generator.py \
   --portfolio-interval 5.0 \
   --market-interval 2.0
 
 # Batch mode with custom settings
-uv run data-generator \
+uv run python data_generator.py \
   --mode batch \
   --num-portfolios 200 \
   --updates-per-portfolio 10
@@ -210,12 +210,12 @@ uv run data-generator \
 
 ```bash
 # Run with multiple workers
-uv run risk-calculator --workers 4
+uv run python risk_calculator.py -w 4
 
 # Enable recovery (requires persistent storage)
-uv run risk-calculator \
-  --recovery-directory ./recovery \
-  --epoch-interval 10
+uv run python risk_calculator.py \
+  -r ./recovery \
+  -s 10
 ```
 
 ## Architecture Components
@@ -225,7 +225,7 @@ uv run risk-calculator \
 The `prospector` command is your main interface for managing all components:
 
 ```bash
-uv run prospector --help
+uv run python prospector.py --help
 ```
 
 It automatically:
@@ -245,54 +245,71 @@ While the Prospector CLI is recommended, you can still run components individual
 docker-compose up -d
 
 # Run specific components
-uv run risk-calculator --workers 4
-uv run data-generator --mode continuous
-uv run risk-api
+uv run python risk_calculator.py -w 4
+uv run python data_generator.py --mode continuous
+uv run python risk_api.py
 ```
 
 ### Performance Testing
 
 ```bash
 # Quick benchmark (1000 portfolios)
-uv run prospector benchmark
+uv run python prospector.py benchmark
 
 # Large benchmark
-uv run prospector benchmark --portfolios 10000 --updates 10
+uv run python prospector.py benchmark --portfolios 10000 --updates 10
 
 # Throughput testing
-uv run benchmark-throughput
+uv run python benchmark_throughput.py
 ```
 
 ### Project Structure
 
 ```
 .
-├── prospector/                 # Main package directory
+├── prospector/                     # Main package directory
 │   ├── __init__.py
-│   ├── core/                   # Core business logic
+│   ├── api/                        # REST API modules
 │   │   ├── __init__.py
-│   │   ├── calculations.py     # Risk calculation functions
-│   │   └── risk_processor.py   # Main risk processing logic
-│   ├── config/                 # Configuration and constants
+│   │   ├── core/                   # API infrastructure
+│   │   │   ├── __init__.py
+│   │   │   ├── dependencies.py    # Shared resources (Redis, Kafka)
+│   │   │   ├── exceptions.py      # Exception handlers
+│   │   │   └── startup.py         # Lifecycle management
+│   │   └── routers/                # API endpoints
+│   │       ├── __init__.py
+│   │       ├── advisor.py         # Advisor portfolio endpoints
+│   │       ├── analytics.py       # Metrics aggregation
+│   │       ├── health.py          # Health checks
+│   │       ├── portfolio.py       # Portfolio management
+│   │       ├── portfolios.py      # Portfolio collections
+│   │       ├── risk.py            # Risk data retrieval
+│   │       └── streaming.py       # SSE streaming
+│   ├── config/                     # Configuration and constants
 │   │   ├── __init__.py
-│   │   ├── constants.py        # Risk parameters and settings
-│   │   └── securities.py       # Security characteristics database
-│   ├── streaming/              # Bytewax streaming components
+│   │   ├── constants.py            # Risk parameters and settings
+│   │   └── securities.py           # Security characteristics database
+│   ├── core/                       # Core business logic
 │   │   ├── __init__.py
-│   │   └── pipeline.py         # Dataflow pipeline definition
-│   └── utils/                  # Utility modules
+│   │   ├── calculations.py         # Risk calculation functions
+│   │   └── risk_processor.py       # Main risk processing logic
+│   ├── streaming/                  # Bytewax streaming components
+│   │   ├── __init__.py
+│   │   └── pipeline.py             # Dataflow pipeline definition
+│   └── utils/                      # Utility modules
 │       ├── __init__.py
-│       └── performance.py      # Performance tracking
-├── prospector.py               # Master control CLI
-├── risk_calculator.py          # Main entry point (streamlined)
-├── data_generator.py           # Test data generator
-├── risk_api.py                 # FastAPI REST service
-├── models.py                   # Pydantic data models
-├── benchmark_throughput.py     # Throughput testing tool
-├── docker-compose.yml          # Infrastructure setup
-├── pyproject.toml              # Project configuration
-├── CALCULATIONS.md             # Financial calculations explained
-└── README.md                   # This file
+│       └── performance.py          # Performance tracking
+├── benchmark_throughput.py         # Throughput testing tool
+├── data_generator.py               # Test data generator
+├── models.py                       # Pydantic data models
+├── prospector.py                   # Master control CLI
+├── risk_api.py                     # FastAPI REST service (main entry)
+├── risk_calculator.py              # Bytewax streaming entry point
+├── docker-compose.yml              # Infrastructure setup
+├── pyproject.toml                  # Project configuration
+├── ARCHITECTURE.md                 # Detailed architecture documentation
+├── CALCULATIONS.md                 # Financial calculations explained
+└── README.md                       # This file
 ```
 
 ## Risk Calculation Methodology
@@ -380,16 +397,16 @@ The `benchmark-throughput` command tests actual read and processing speeds witho
 
 ```bash
 # Run complete throughput benchmark
-uv run benchmark-throughput
+uv run python benchmark_throughput.py
 
-# Test with more messages
-uv run benchmark-throughput --kafka-messages 50000 --redis-operations 20000
+# Test with specific duration
+uv run python benchmark_throughput.py --duration 60
 
 # Reprocess topic from beginning
-uv run benchmark-throughput --from-beginning
+uv run python benchmark_throughput.py --from-beginning
 
-# Use specific consumer group
-uv run benchmark-throughput --consumer-group my-test-group
+# Test with specific message count
+uv run python benchmark_throughput.py --messages 100000
 ```
 
 #### What It Measures
@@ -466,10 +483,10 @@ The Prospector system achieves this performance through:
 Run your own benchmark:
 ```bash
 # Quick performance test
-uv run benchmark-throughput --topic portfolio-updates-v2 --duration 30
+uv run python benchmark_throughput.py --topic portfolio-updates-v2 --duration 30
 
 # Test with specific message count
-uv run benchmark-throughput --messages 100000 --from-beginning
+uv run python benchmark_throughput.py --messages 100000 --from-beginning
 ```
 
 ##  Deployment
@@ -522,13 +539,13 @@ LOG_LEVEL=INFO
 4. **Performance Issues**
    ```bash
    # Run benchmark to diagnose
-   uv run prospector benchmark --portfolios 100
+   uv run python prospector.py benchmark --portfolios 100
 
    # Run throughput test
-   uv run benchmark-throughput
+   uv run python benchmark_throughput.py
 
    # Increase workers if needed
-   uv run risk-calculator --workers 4
+   uv run python risk_calculator.py -w 4
    ```
 
 ## Contributing
