@@ -37,24 +37,31 @@ logger = logging.getLogger(__name__)
 
 def initialize_redis() -> redis.Redis:
     """
-    Initialize Redis connection for risk calculation caching.
+    Initialize Redis connection with connection pooling for better performance.
     
-    Establishes a connection to the local Redis instance used for:
+    Establishes a connection pool to the local Redis instance used for:
     - Caching calculated risk metrics for API retrieval
     - Storing global performance metrics
     - Portfolio calculation deduplication
     
     Returns:
-        redis.Redis: Connected Redis client, or None if connection fails
+        redis.Redis: Connected Redis client with connection pool, or None if connection fails
         
     Note:
         The system can operate without Redis, but API endpoints will
         not have access to calculated risk data.
     """
     try:
-        client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+        # Use connection pool for better performance with multiple workers
+        pool = redis.ConnectionPool(
+            host='localhost', 
+            port=6379, 
+            decode_responses=True,
+            max_connections=50  # Support multiple concurrent operations
+        )
+        client = redis.Redis(connection_pool=pool)
         client.ping()
-        logger.info("✅ Redis connected")
+        logger.info("✅ Redis connected with connection pooling")
         return client
     except Exception as e:
         logger.warning(f"⚠️ Redis not available: {e}")

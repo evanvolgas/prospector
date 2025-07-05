@@ -33,19 +33,35 @@ class RiskProcessor:
     - Security characteristic retrieval
     - Portfolio metrics calculation
     - Risk score generation
-    - Results caching
-    - Performance tracking
+    - Results caching with pipelining
+    - Performance tracking with batching
     """
     
-    def __init__(self, redis_client: Optional[redis.Redis] = None):
+    def __init__(self, redis_client: Optional[redis.Redis] = None, worker_id: int = 0):
         """
         Initialize risk processor.
         
         Args:
             redis_client: Optional Redis client for caching
+            worker_id: Unique worker identifier for metrics
         """
         self.redis_client = redis_client
+        self.worker_id = worker_id
         self.perf_tracker = PerformanceTracker()
+        
+        # Batch metrics updates to reduce contention
+        self.metrics_batch = {
+            'calculations': 0,
+            'processing_time': 0.0,
+            'last_flush': time.time()
+        }
+        self.batch_size = 100  # Flush metrics every N calculations
+        self.batch_timeout = 5.0  # Or every N seconds
+        
+        # Use pipeline for better performance
+        self.pipeline = None
+        if self.redis_client:
+            self.pipeline = self.redis_client.pipeline(transaction=False)
         
     def calculate_portfolio_risk(
         self, 
@@ -214,15 +230,105 @@ class RiskProcessor:
         }
         
         try:
-            self.redis_client.hset(f"portfolio:{key}", mapping=risk_data)
-            self.redis_client.expire(f"portfolio:{key}", REDIS_TTL)
+            # Use pipeline for all operations
+            self.pipeline.hset(f"portfolio:{key}", mapping=risk_data)
+            self.pipeline.expire(f"portfolio:{key}", REDIS_TTL)
             
-            # Update global metrics
-            self.redis_client.hincrby("global:metrics", "total_calculations", 1)
-            self.redis_client.hincrbyfloat(
-                "global:metrics", 
-                "total_processing_time_ms", 
-                risk_calc.calculation_time_ms
+            # Update batch metrics
+            self.metrics_batch['calculations'] += 1
+            self.metrics_batch['processing_time'] += risk_calc.calculation_time_ms
+            
+            # Check if we should flush
+            should_flush = (
+                self.metrics_batch['calculations'] >= self.batch_size or
+                time.time() - self.metrics_batch['last_flush'] > self.batch_timeout
             )
+            
+            if should_flush:
+                # Add batched metrics to pipeline
+                self.pipeline.hincrby(
+                    "global:metrics", 
+                    "total_calculations", 
+                    self.metrics_batch['calculations']
+                )
+                self.pipeline.hincrbyfloat(
+                    "global:metrics", 
+                    "total_processing_time_ms", 
+                    self.metrics_batch['processing_time']
+                )
+                
+                # Worker-specific metrics (no contention)
+                self.pipeline.hincrby(
+                    f"worker:{self.worker_id}:metrics",
+                    "calculations",
+                    self.metrics_batch['calculations']
+                )
+                
+                # Execute pipeline
+                self.pipeline.execute()
+                
+                # Reset batch
+                self.metrics_batch['calculations'] = 0
+                self.metrics_batch['processing_time'] = 0.0
+                self.metrics_batch['last_flush'] = time.time()
+                
+                # Create new pipeline
+                self.pipeline = self.redis_client.pipeline(transaction=False)
+            else:
+                # Just execute current pipeline for portfolio data
+                self.pipeline.execute()
+                self.pipeline = self.redis_client.pipeline(transaction=False)
+                
         except Exception as e:
             logger.error(f"Redis error: {e}")
+            # Reset pipeline on error
+            if self.redis_client:
+                self.pipeline = self.redis_client.pipeline(transaction=False)
+    
+    def _apply_risk_tolerance_adjustment(
+        self, base_risk: int, tolerance: RiskTolerance
+    ) -> int:
+        """
+        Apply behavioral adjustments based on risk tolerance.
+        
+        Args:
+            base_risk: Base risk number (20-100)
+            tolerance: Investor's risk tolerance level
+            
+        Returns:
+            Adjusted risk number within valid range
+        """
+        if tolerance == RiskTolerance.CONSERVATIVE:
+            # Conservative investors perceive more risk
+            adjusted = int(base_risk * CONSERVATIVE_ADJUSTMENT)
+        elif tolerance == RiskTolerance.AGGRESSIVE:
+            # Aggressive investors perceive less risk
+            adjusted = int(base_risk * AGGRESSIVE_ADJUSTMENT)
+        else:
+            # Moderate - no adjustment
+            adjusted = base_risk
+            
+        # Ensure within valid range
+        return max(20, min(100, adjusted))
+    
+    def flush_metrics(self):
+        """Force flush any pending metrics updates."""
+        if self.redis_client and self.pipeline and self.metrics_batch['calculations'] > 0:
+            try:
+                self.pipeline.hincrby(
+                    "global:metrics", 
+                    "total_calculations", 
+                    self.metrics_batch['calculations']
+                )
+                self.pipeline.hincrbyfloat(
+                    "global:metrics", 
+                    "total_processing_time_ms", 
+                    self.metrics_batch['processing_time']
+                )
+                self.pipeline.execute()
+                
+                self.metrics_batch['calculations'] = 0
+                self.metrics_batch['processing_time'] = 0.0
+                self.pipeline = self.redis_client.pipeline(transaction=False)
+            except Exception as e:
+                logger.error(f"Metrics flush error: {e}")

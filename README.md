@@ -29,16 +29,15 @@ A high-performance, real-time portfolio risk calculation system built with Bytew
   - Behavioral finance risk scoring (20-100 scale)
   - Value at Risk (VaR) calculations at 95% confidence
   - Correlation-based portfolio analysis
-- **Production-Ready Performance** (tested on 5M messages / 10.3 GB dataset):
-  - **85,000+ messages/second** sustained throughput
-  - **93,600 messages/second** peak performance
-  - Processes entire dataset in under 60 seconds
-  - **Sub-millisecond latency** (P99: 0.01 ms)
-  - **0.115 ms** average per risk calculation
+- **Production-Ready Performance**:
+  - **Kafka**: 83,320 msg/s (173.3 MB/s) average, 148,135 msg/s (308.1 MB/s) peak
+  - **NumPy**: 51,172 calculations/second (0.020 ms average latency)
+  - **Redis**: 36,173 writes/second with pipelining
+  - **End-to-End**: 14,260 msg/s (29.6 MB/s) single worker throughput
 - **Horizontal Scalability**: 
   - Kafka partitioning enables parallel processing
-  - Linear scaling with additional workers
-  - Tested projection: 1M+ messages/second with 12 workers
+  - Best scaling with distributed deployment (1 worker per machine)
+  - Alternative: Kafka sink for 180K+ msg/s on single machine (12 processes)
 - **RESTful API**: FastAPI service for real-time risk queries and monitoring
 - **High-Performance Caching**: Redis for instant risk metric retrieval
 - **One-Command Setup**: Complete infrastructure via Docker Compose
@@ -391,10 +390,43 @@ uv run mypy .
 
 ## Performance Benchmarking
 
-### Throughput Testing
+### Benchmark Suite
 
-The `benchmark-throughput` command tests actual read and processing speeds without clearing your data:
+#### Component Performance Testing
+Test individual components in isolation:
+```bash
+# Test Kafka, NumPy, and Redis separately
+uv run python benchmark_components.py
 
+# Customize test sizes
+uv run python benchmark_components.py --kafka-messages 100000 --numpy-calculations 10000
+```
+
+#### Kafka vs Redis Sink Comparison
+Compare throughput when sinking to Kafka vs Redis:
+```bash
+# Run both benchmarks
+uv run python benchmark_kafka_sink.py --messages 50000
+
+# Run only Kafka sink test
+uv run python benchmark_kafka_sink.py --mode kafka --messages 100000
+
+# Run only Redis sink test  
+uv run python benchmark_kafka_sink.py --mode redis --messages 100000
+```
+
+#### Parallel Processing Benchmark
+Test maximum throughput with 12 concurrent processes:
+```bash
+# Run with 12 processes
+uv run python benchmark_kafka_parallel.py --processes 12 --messages 10000
+
+# Test with different process counts
+uv run python benchmark_kafka_parallel.py --processes 4 --messages 25000
+```
+
+#### Enhanced Throughput Testing
+Detailed per-second metrics for Kafka consumption:
 ```bash
 # Run complete throughput benchmark
 uv run python benchmark_throughput.py
@@ -402,73 +434,48 @@ uv run python benchmark_throughput.py
 # Test with specific duration
 uv run python benchmark_throughput.py --duration 60
 
-# Reprocess topic from beginning
-uv run python benchmark_throughput.py --from-beginning
-
 # Test with specific message count
 uv run python benchmark_throughput.py --messages 100000
 ```
 
-#### What It Measures
-
-1. **Kafka Read Performance**: Messages/second and MB/second consumption rates
-2. **Redis Performance**: Read and write operations per second
-3. **End-to-End Processing**: Actual throughput with the risk calculator running
-
 ### Latest Performance Metrics
 
-Based on comprehensive benchmarks with 12 partitions processing 5 million messages (10.3 GB):
+**Test Environment:** Apple M3 Max (14 cores, 36GB RAM), macOS, Local Docker
 
-#### Single Worker Performance
-- **Peak Throughput**: 93,658 messages/second (193.73 MB/s)
-- **Sustained Rate**: 85,021 messages/second (176.86 MB/s) over full dataset
-- **Processing Time**: 58 seconds to consume all 4.9M messages
-- **Message Size**: 2,181 bytes average
+#### Component Performance (Isolated)
+- **Kafka Read**: 83,320 msg/s (173.3 MB/s) average, 148,135 msg/s (308.1 MB/s) peak
+- **NumPy Calculations**: 51,172 calculations/second
+  - P50: 0.020 ms, P95: 0.022 ms, P99: 0.032 ms per calculation
+- **Redis Writes**: 36,173 operations/second (with pipelining)
+  - P50: 0.028 ms, P95: 0.002 ms, P99: 0.087 ms per operation
 
-#### Latency Characteristics
-- **P50 Latency**: 0.00 ms
-- **P95 Latency**: 0.00 ms  
-- **P99 Latency**: 0.01 ms
-- **Average Latency**: < 0.01 ms (sub-millisecond for all operations)
+#### End-to-End Performance (Single Machine)
+- **Single Worker**: 14,260 msg/s (29.6 MB/s) complete pipeline
+- **Multi-Worker Scaling**: Limited by Redis contention
+  - 2 Workers: ~500 msg/s (1.0 MB/s) total - severe degradation
+  - 4+ Workers: <400 msg/s (0.8 MB/s) total - Redis bottleneck
 
-#### Risk Calculation Performance
-- **Calculation Speed**: ~0.115 ms per portfolio
-- **Redis Operations**: 3,934 ops/second sustained
-- **Cache Efficiency**: 100% hit rate for recent calculations
-- **Memory Usage**: Minimal (streaming architecture)
+#### Sink Performance Comparison
+- **Kafka Sink**: ~25,000 msg/s (52.0 MB/s) single process
+- **Redis Sink**: ~18,000 msg/s (37.4 MB/s) with pipelining
+- **Parallel Kafka Sink**: ~180,000 msg/s (374.3 MB/s) with 12 processes
 
-#### Daily Capacity (Single Worker)
-- **Messages**: 7.35 billion messages/day
-- **Data Volume**: 15.3 TB/day
-- **Portfolios**: 7.35 billion risk calculations/day
+#### Daily Capacity Estimates
 
-#### Scaling Projections with 12 Workers
+**Single Worker (Redis Sink):**
+- Messages: 1.2 billion/day
+- Data Volume: 2.5 TB/day (29.6 MB/s × 86,400s)
 
-With 12 Prospector workers (one per Kafka partition):
+**12 Parallel Processes (Kafka Sink):**
+- Messages: 15.6 billion/day  
+- Data Volume: 31.5 TB/day (374.3 MB/s × 86,400s)
 
-- **Theoretical Peak**: 1,123,896 messages/second (2.33 GB/s)
-- **Sustained Throughput**: 1,020,252 messages/second (2.12 GB/s)
-- **Daily Capacity**:
-  - **88.2 billion messages/day**
-  - **183.2 TB/day sustained**
-  - **201.4 TB/day at peak**
+#### Distributed Deployment Projections
 
-#### Advanced Scaling Options
-
-1. **Horizontal Scaling**: 
-   - 12 Kafka partitions = 12 parallel consumers
-   - Each consumer can run multiple Bytewax workers
-   - Example: 12 consumers × 4 workers = 48 parallel processors
-
-2. **Vertical Scaling**:
-   - Increase partition count for more parallelism
-   - Add more Kafka brokers for higher throughput
-   - Scale Redis with clustering for cache distribution
-
-3. **Theoretical Maximum** (12 consumers × 4 workers):
-   - **4.2 billion messages/hour**
-   - **732.8 TB/day** processing capacity
-   - Sub-second end-to-end latency maintained
+With proper distributed architecture (12 machines, 1 worker each):
+- Expected: ~171,000 msg/s (355.6 MB/s) aggregate
+- Daily: 14.8 billion messages (29.9 TB/day)
+- No Redis contention between workers
 
 #### Architecture Efficiency
 
